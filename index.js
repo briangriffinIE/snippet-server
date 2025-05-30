@@ -13,6 +13,9 @@ const cookieParser = require('cookie-parser');
 
 const app = express();
 
+// Trust proxy headers for accurate IP detection in rate limiting
+app.set('trust proxy', 1);
+
 // Security middleware
 app.use(helmet({
   contentSecurityPolicy: {
