@@ -66,4 +66,4 @@ The server will run on port 3000 by default. You can change this by setting the 
 - express-session
 - bcrypt
 - marked
-- highlight.js 
+- highlight.js
