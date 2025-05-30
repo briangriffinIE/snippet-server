@@ -21,12 +21,23 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrcElem: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+      scriptSrcElem: [
+        "'self'",
+        "'unsafe-inline'",
+        "https://cdnjs.cloudflare.com",
+        "https://cdn.jsdelivr.net"
+      ],
+      scriptSrc: [
+        "'self'",
+        "'unsafe-inline'",
+        "https://cdnjs.cloudflare.com",
+        "https://cdn.jsdelivr.net"
+      ],
       scriptSrcAttr: ["'unsafe-inline'"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
-      imgSrc: ["'self'", "data:", "https://cdnjs.cloudflare.com"], // Added data: for potential inline images if needed
-      connectSrc: ["'self'"],
-      fontSrc: ["'self'", "https://cdnjs.cloudflare.com"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net"],
+      imgSrc: ["'self'", "data:", "https://cdnjs.cloudflare.com"],
+      connectSrc: ["'self'", "https://cdn.jsdelivr.net"],
+      fontSrc: ["'self'", "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net"],
       objectSrc: ["'none'"],
       baseUri: ["'self'"],
       formAction: ["'self'"],
@@ -317,6 +328,11 @@ app.get('/search', (req, res) => {
 app.get('/admin', requireAuth, csrfProtection, (req, res) => {
   const snippets = getAllSnippets();
   const languages = [...new Set(snippets.map(s => s.language))];
+  const snippetCount = snippets.length;
+  const langCounts = languages.map(lang => ({
+    lang,
+    count: snippets.filter(s => s.language === lang).length
+  }));
 
   res.send(`
     <!DOCTYPE html>
@@ -325,154 +341,142 @@ app.get('/admin', requireAuth, csrfProtection, (req, res) => {
       <title>Admin - Snippet List</title>
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs2015.min.css">
       <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/powershell.min.js"></script>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
       <style>
         body { font-family: monospace; background: #1e1e1e; color: #eee; padding: 2em; }
-        .container { max-width: 800px; margin: 0 auto; }
-        .search-box { margin-bottom: 2em; }
-        .search-box input, .search-box select { 
-          padding: 0.5em; 
-          margin-right: 1em; 
-          background: #252526; 
-          color: #eee; 
-          border: 1px solid #333; 
+        .container { max-width: 900px; margin: 0 auto; }
+        .summary { background: #252526; padding: 1em; border-radius: 6px; margin-bottom: 2em; }
+        .summary span { margin-right: 2em; }
+        .search-sort { display: flex; gap: 1em; margin-bottom: 1em; }
+        .search-sort input, .search-sort select { 
+          padding: 0.5em; background: #252526; color: #eee; border: 1px solid #333; 
         }
-        ul { list-style: none; padding: 0; }
-        li { margin: 0.5em 0; display: flex; justify-content: space-between; align-items: center; }
-        a { color: #007acc; text-decoration: none; }
-        a:hover { text-decoration: underline; }
-        .actions { margin-left: 1em; }
-        .delete-btn { 
-          background: #ff5555; 
-          color: white; 
-          border: none; 
-          padding: 0.3em 0.6em; 
-          cursor: pointer; 
-          border-radius: 3px; 
-        }
+        table { width: 100%; border-collapse: collapse; background: #252526; }
+        th, td { padding: 0.7em; border-bottom: 1px solid #333; text-align: left; }
+        th { background: #232323; }
+        tr:hover { background: #2a2a2a; }
+        .actions a, .actions button { margin-right: 0.5em; }
+        .delete-btn { background: #ff5555; color: white; border: none; padding: 0.3em 0.7em; border-radius: 3px; cursor: pointer; }
         .delete-btn:hover { background: #ff3333; }
-        .snippet-preview {
-          margin-top: 0.5em;
-          padding: 0.5em;
-          background: #252526;
-          border-radius: 4px;
-          font-size: 0.9em;
-          max-height: 100px;
-          overflow: hidden;
-        }
-        .snippet-preview pre {
-          margin: 0;
-          padding: 0;
-        }
+        .no-results { color: #ff5555; text-align: center; margin: 2em 0; }
       </style>
     </head>
     <body>
       ${getNavigation('admin')}
       <div class="container">
-        <h1>Snippet List</h1>
-        <div class="search-box">
+        <div class="summary">
+          <span><strong>Total snippets:</strong> ${snippetCount}</span>
+          ${langCounts.map(lc => `<span><strong>${lc.lang}:</strong> ${lc.count}</span>`).join('')}
+        </div>
+        <div class="search-sort">
           <input type="text" id="search" placeholder="Search snippets...">
           <select id="language">
             <option value="">All Languages</option>
             ${languages.map(lang => `<option value="${lang}">${lang}</option>`).join('')}
           </select>
+          <select id="sort">
+            <option value="date-desc">Newest First</option>
+            <option value="date-asc">Oldest First</option>
+            <option value="lang-asc">Language A-Z</option>
+            <option value="lang-desc">Language Z-A</option>
+          </select>
         </div>
-        <ul id="snippet-list">
-          ${snippets.map(s => `
-            <li>
-              <div>
-                <span>${s.filename}</span>
-                <div class="snippet-preview">
-                  <pre><code class="hljs language-${s.language}">${s.content}</code></pre>
-                </div>
-              </div>
-              <div class="actions">
-                <a href="/edit?file=${s.filename}">[edit]</a>
-                <a href="/view?file=${s.filename}" target="_blank">[view]</a>
-                <button class="delete-btn" data-filename="${s.filename}">[delete]</button>
-              </div>
-            </li>
-          `).join('')}
-        </ul>
+        <table>
+          <thead>
+            <tr>
+              <th>Filename</th>
+              <th>Language</th>
+              <th>Date</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="snippet-list">
+            ${snippets.map(s => `
+              <tr>
+                <td>${s.filename}</td>
+                <td>${s.language}</td>
+                <td>${s.timestamp.replace(/T/, ' ').replace(/-/g, '/').slice(0, 19)}</td>
+                <td class="actions">
+                  <a href="/edit?file=${s.filename}">[edit]</a>
+                  <a href="/view?file=${s.filename}" target="_blank">[view]</a>
+                  <button class="delete-btn" data-filename="${s.filename}">[delete]</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        <div id="no-results" class="no-results" style="display:none;">No snippets found.</div>
         <p><a href="/">Back to form</a></p>
       </div>
       ${getQuickSnippetDialog(req.csrfToken())}
       <script>
         const searchInput = document.getElementById('search');
         const languageSelect = document.getElementById('language');
+        const sortSelect = document.getElementById('sort');
         const snippetList = document.getElementById('snippet-list');
-
-        // Initialize syntax highlighting
-        document.addEventListener('DOMContentLoaded', (event) => {
-          document.querySelectorAll('pre code').forEach((block) => {
-            hljs.highlightElement(block);
-          });
-        });
+        const noResults = document.getElementById('no-results');
 
         async function updateList() {
           const query = searchInput.value;
           const language = languageSelect.value;
           const response = await fetch('/search?q=' + encodeURIComponent(query) + '&lang=' + encodeURIComponent(language));
-          const snippets = await response.json();
-          
-          snippetList.innerHTML = snippets.map(function(s) {
-            return '<li>' +
-              '<div>' +
-                '<span>' + s.filename + '</span>' +
-                '<div class="snippet-preview">' +
-                  '<pre><code class="hljs language-' + s.language + '">' + s.content + '</code></pre>' +
-                '</div>' +
-              '</div>' +
-              '<div class="actions">' +
-                '<a href="/edit?file=' + encodeURIComponent(s.filename) + '">[edit]</a>' +
-                '<a href="/view?file=' + encodeURIComponent(s.filename) + '" target="_blank">[view]</a>' +
-                '<button class="delete-btn" data-filename="' + encodeURIComponent(s.filename) + '">[delete]</button>' +
-              '</div>' +
-            '</li>';
-          }).join('');
+          let snippets = await response.json();
 
-          // Re-initialize syntax highlighting for new content
-          document.querySelectorAll('pre code').forEach((block) => {
-            hljs.highlightElement(block);
+          // Sorting
+          const sort = sortSelect.value;
+          snippets = snippets.sort((a, b) => {
+            if (sort === 'date-desc') return b.timestamp.localeCompare(a.timestamp);
+            if (sort === 'date-asc') return a.timestamp.localeCompare(b.timestamp);
+            if (sort === 'lang-asc') return a.language.localeCompare(b.language);
+            if (sort === 'lang-desc') return b.language.localeCompare(a.language);
+            return 0;
           });
+
+          if (snippets.length === 0) {
+            snippetList.innerHTML = '';
+            noResults.style.display = '';
+          } else {
+            noResults.style.display = 'none';
+            snippetList.innerHTML = snippets.map(function(s) {
+              return '<tr>' +
+                '<td>' + s.filename + '</td>' +
+                '<td>' + s.language + '</td>' +
+                '<td>' + s.timestamp.replace(/T/, ' ').replace(/-/g, '/').slice(0, 19) + '</td>' +
+                '<td class="actions">' +
+                  '<a href="/edit?file=' + encodeURIComponent(s.filename) + '">[edit]</a>' +
+                  '<a href="/view?file=' + encodeURIComponent(s.filename) + '" target="_blank">[view]</a>' +
+                  '<button class="delete-btn" data-filename="' + encodeURIComponent(s.filename) + '">[delete]</button>' +
+                '</td>' +
+              '</tr>';
+            }).join('');
+          }
         }
 
         searchInput.addEventListener('input', updateList);
         languageSelect.addEventListener('change', updateList);
+        sortSelect.addEventListener('change', updateList);
 
-        // Use event delegation for delete button clicks
+        // Delete handler
         snippetList.addEventListener('click', async (event) => {
           const target = event.target;
           if (target.classList.contains('delete-btn')) {
-            event.preventDefault(); // Prevent default action
+            event.preventDefault();
             const filename = target.dataset.filename;
-            console.log('Delete button clicked for:', filename);
             if (confirm('Are you sure you want to delete this snippet?')) {
-              console.log('User confirmed deletion, sending request...');
               const response = await fetch('/delete?file=' + encodeURIComponent(filename), {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
-                  // Ensure the CSRF token is correctly included
                   'X-CSRF-Token': document.querySelector('input[name="_csrf"]').value
                 }
               });
-              if (response.ok) {
-                console.log('Delete request successful, updating list...');
-                updateList();
-              } else {
-                console.error('Delete request failed:', response.status, response.statusText);
-                const errorText = await response.text();
-                console.error('Error details:', errorText);
-                alert('Failed to delete snippet: ' + response.statusText + (errorText ? ' - ' + errorText : ''));
-              }
+              if (response.ok) updateList();
+              else alert('Failed to delete snippet.');
             }
           }
         });
+
+        // Initial load
+        updateList();
       </script>
     </body>
     </html>
@@ -508,41 +512,73 @@ app.post('/delete', requireAuth, csrfProtection, (req, res) => {
 app.get('/edit', requireAuth, (req, res) => {
   const filename = req.query.file;
   if (!filename) return res.status(400).send('No file specified');
-  
   const fullPath = path.join(snippetsDir, filename);
   if (!fs.existsSync(fullPath)) return res.status(404).send('File not found');
-
   const content = JSON.parse(fs.readFileSync(fullPath, 'utf-8'));
   const lang = content.language || 'plaintext';
-  const code = content.code;
+  const code = content.code.replace(/<\/script>/g, '<\\/script>'); // Prevent script tag break
 
   res.send(`
     <!DOCTYPE html>
     <html>
     <head>
       <title>Edit Snippet</title>
-      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs2015.min.css">
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/powershell.min.js"></script>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
       <style>
-        body { font-family: monospace; background: #1e1e1e; color: #eee; padding: 2em; }
+        body { font-family: 'Consolas', 'Monaco', monospace; background: #1e1e1e; color: #eee; padding: 2em; }
         .container { max-width: 1200px; margin: 0 auto; }
-        textarea, select { width: 100%; margin: 1em 0; padding: 1em; background: #252526; color: #eee; border: 1px solid #333; }
-        textarea { height: 300px; }
-        button { padding: 1em 2em; background: #007acc; color: white; border: none; cursor: pointer; }
-        .preview { margin-top: 2em; padding: 1em; background: #252526; border: 1px solid #333; }
+        .editor-window {
+          background: #1e1e1e;
+          border: 1px solid #333;
+          border-radius: 8px 8px 0 0;
+          box-shadow: 0 4px 24px #000a;
+          margin-bottom: 2em;
+        }
+        .editor-header {
+          background: #232323;
+          border-bottom: 1px solid #333;
+          border-radius: 8px 8px 0 0;
+          padding: 0.5em 1em;
+          display: flex;
+          align-items: center;
+          gap: 0.5em;
+        }
+        .editor-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+        .dot-red { background: #ff5f56; }
+        .dot-yellow { background: #ffbd2e; }
+        .dot-green { background: #27c93f; }
+        .editor-title { margin-left: 1em; color: #bbb; font-size: 1em; flex: 1; }
+        .editor-label { color: #aaa; font-size: 0.95em; margin-top: 1em; }
+        #monaco { height: 400px; width: 100%; border-radius: 0 0 8px 8px; margin-bottom: 1em; }
+        form { margin-bottom: 0; }
+        select, button {
+          margin: 1em 0 0.5em 0;
+          padding: 0.7em 1em;
+          background: #252526;
+          color: #eee;
+          border: 1px solid #333;
+          border-radius: 4px;
+          font-size: 1em;
+        }
+        button {
+          background: #007acc;
+          color: white;
+          border: none;
+          cursor: pointer;
+        }
       </style>
+      <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
     </head>
     <body>
       <div class="container">
-        <h1>Editing: ${filename}</h1>
-        <form method="POST" action="/save-edit">
-          <input type="hidden" name="filename" value="${filename}">
-          <select name="language" onchange="updatePreview()">
+        <div class="editor-window">
+          <div class="editor-header">
+            <span class="editor-dot dot-red"></span>
+            <span class="editor-dot dot-yellow"></span>
+            <span class="editor-dot dot-green"></span>
+            <span class="editor-title">${filename}</span>
+          </div>
+          <label class="editor-label" for="lang-select">Language:</label>
+          <select name="language" id="lang-select" style="width:200px;">
             <option value="plaintext" ${lang === 'plaintext' ? 'selected' : ''}>Plain Text</option>
             <option value="sql" ${lang === 'sql' ? 'selected' : ''}>SQL</option>
             <option value="powershell" ${lang === 'powershell' ? 'selected' : ''}>PowerShell</option>
@@ -550,24 +586,51 @@ app.get('/edit', requireAuth, (req, res) => {
             <option value="python" ${lang === 'python' ? 'selected' : ''}>Python</option>
             <option value="bash" ${lang === 'bash' ? 'selected' : ''}>Bash</option>
           </select>
-          <textarea name="snippet" oninput="updatePreview()">${code}</textarea>
-          <button type="submit">Save Changes</button>
-        </form>
-        <div class="preview">
-          <h3>Preview:</h3>
-          <pre><code id="preview"></code></pre>
+          <div id="monaco"></div>
+          <form method="POST" action="/save-edit" autocomplete="off" spellcheck="false" onsubmit="return submitMonaco()">
+            <input type="hidden" name="filename" value="${filename}">
+            <input type="hidden" name="language" id="hidden-language" value="${lang}">
+            <input type="hidden" name="snippet" id="snippet-hidden">
+            <button type="submit">💾 Save Changes</button>
+          </form>
         </div>
       </div>
       <script>
-        function updatePreview() {
-          const language = document.querySelector('select[name="language"]').value;
-          const code = document.querySelector('textarea[name="snippet"]').value;
-          const preview = document.getElementById('preview');
-          preview.textContent = code;
-          preview.className = 'hljs language-' + language;
-          hljs.highlightElement(preview);
-        }
-        updatePreview();
+        document.addEventListener('DOMContentLoaded', function() {
+          const langMap = {
+            plaintext: 'plaintext',
+            sql: 'sql',
+            powershell: 'powershell',
+            javascript: 'javascript',
+            python: 'python',
+            bash: 'shell'
+          };
+          let editor;
+          require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' }});
+          require(['vs/editor/editor.main'], function () {
+            editor = monaco.editor.create(document.getElementById('monaco'), {
+              value: \`${code.replace(/\\/g, '\\\\').replace(/`/g, '\\`')}\`,
+              language: langMap['${lang}'] || 'plaintext',
+              theme: 'vs-dark',
+              fontSize: 16,
+              minimap: { enabled: false },
+              automaticLayout: true,
+              scrollBeyondLastLine: false,
+              roundedSelection: false,
+              scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 }
+            });
+            document.getElementById('lang-select').addEventListener('change', function() {
+              const newLang = langMap[this.value] || 'plaintext';
+              monaco.editor.setModelLanguage(editor.getModel(), newLang);
+              document.getElementById('hidden-language').value = this.value;
+            });
+            window.submitMonaco = function() {
+              document.getElementById('snippet-hidden').value = editor.getValue();
+              document.getElementById('hidden-language').value = document.getElementById('lang-select').value;
+              return true;
+            }
+          });
+        });
       </script>
     </body>
     </html>
@@ -608,118 +671,61 @@ app.get('/view', (req, res) => {
     <head>
       <title>${filename}</title>
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs2015.min.css">
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
       <style>
-        body { 
-          font-family: 'Consolas', 'Monaco', monospace; 
-          background: #1e1e1e; 
-          color: #eee; 
-          padding: 2em;
-          line-height: 1.6;
-        }
-        .container { 
-          max-width: 800px; 
-          margin: 0 auto; 
-        }
-        pre {
-          background: #1e1e1e;
-          padding: 1em;
-          border-radius: 4px;
-          overflow-x: auto;
-          position: relative;
-          margin: 1em 0;
-        }
-        code {
-          font-family: 'Consolas', 'Monaco', monospace;
-          font-size: 14px;
-          line-height: 1.5;
-          tab-size: 4;
-          white-space: pre;
-        }
+        body { font-family: 'Consolas', 'Monaco', monospace; background: #1e1e1e; color: #eee; padding: 2em; }
+        .container { max-width: 900px; margin: 0 auto; }
+        .code-block { background: #1e1e1e; border: 1px solid #333; border-radius: 4px; display: flex; }
         .line-numbers {
-          position: absolute;
-          left: 0;
-          top: 0;
-          bottom: 0;
-          width: 3.5em;
-          background: #252526;
-          border-right: 1px solid #333;
+          background: #232323;
+          color: #444;
           padding: 1em 0.5em;
           text-align: right;
-          color: #666;
           user-select: none;
+          min-width: 3em;
+          border-right: 1px solid #333;
         }
         .code-content {
-          margin-left: 3.5em;
           padding: 1em;
+          overflow-x: auto;
+          width: 100%;
         }
         .hljs {
           background: transparent !important;
-          padding: 0 !important;
         }
-        .hljs-keyword { color: #569cd6; }
-        .hljs-string { color: #ce9178; }
-        .hljs-number { color: #b5cea8; }
-        .hljs-comment { color: #6a9955; }
-        .hljs-function { color: #dcdcaa; }
-        .hljs-variable { color: #9cdcfe; }
-        .hljs-operator { color: #d4d4d4; }
-        .hljs-attr { color: #9cdcfe; }
-        .hljs-property { color: #9cdcfe; }
-        .hljs-selector { color: #d7ba7d; }
-        .hljs-tag { color: #569cd6; }
-        .hljs-attribute { color: #9cdcfe; }
       </style>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/powershell.min.js"></script>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
     </head>
     <body>
       ${getNavigation('view')}
       <div class="container">
         <h1>${filename}</h1>
-        <pre><code class="hljs language-sql">${code}</code></pre>
+        <div class="code-block">
+          <div class="line-numbers" id="line-numbers"></div>
+          <div class="code-content">
+            <pre style="margin:0;"><code id="code" class="hljs language-${lang}"></code></pre>
+          </div>
+        </div>
       </div>
       <script>
-        // Initialize syntax highlighting and line numbers
-        document.addEventListener('DOMContentLoaded', (event) => {
-          const pre = document.querySelector('pre');
-          const code = pre ? pre.querySelector('code') : null;
-
-          if (pre && code) {
-            // Store the original code content and language before restructuring
-            const originalCode = code.textContent;
-            // Extract language from the class name (e.g., 'language-sql' -> 'sql')
-            const langMatch = code.className.match(/language-(.+)/);
-            const lang = langMatch ? langMatch[1] : 'plaintext';
-
-            // Add line numbers
-            const lines = originalCode.split('\n');
-            const lineNumbers = document.createElement('div');
-            lineNumbers.className = 'line-numbers';
-            lineNumbers.innerHTML = lines.map((_, i) => i + 1).join('\n');
-
-            const codeContent = document.createElement('div');
-            codeContent.className = 'code-content';
-
-            // Create a new code element, set its content, and add highlight.js classes
-            const newCodeElement = document.createElement('code');
-            newCodeElement.textContent = originalCode;
-            newCodeElement.classList.add('hljs', 'language-' + lang);
-
-            // Append the new code element to the content wrapper
-            codeContent.appendChild(newCodeElement);
-
-            // Clear the original pre and append the new structure
-            pre.innerHTML = '';
-            pre.appendChild(lineNumbers);
-            pre.appendChild(codeContent);
-
-            // Apply syntax highlighting to the new code element
-            console.log('Attempting to highlight new code element:', newCodeElement);
-            hljs.highlightElement(newCodeElement);
-
-          } else {
-            console.error('Pre or code element not found on view page.');
-          }
+        function escapeHtml(text) {
+          return text.replace(/[&<>"']/g, function(m) {
+            return ({
+              '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            })[m];
+          });
+        }
+        document.addEventListener('DOMContentLoaded', function() {
+          const code = \`${code.replace(/`/g, '\\`')}\`;
+          const lines = code.split('\\n');
+          document.getElementById('line-numbers').innerHTML = lines.map((_, i) => i + 1).join('<br>');
+          const codeElem = document.getElementById('code');
+          codeElem.textContent = code;
+          hljs.highlightElement(codeElem);
         });
       </script>
     </body>

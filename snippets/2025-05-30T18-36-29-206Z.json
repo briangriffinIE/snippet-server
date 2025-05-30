@@ -1,5 +1,5 @@
 {
   "language": "sql",
-  "code": "--JSON TEST\r\nSELECT * FROM DUAL;",
+  "code": "",
   "timestamp": "2025-05-30T18-36-29-206Z"
 }
