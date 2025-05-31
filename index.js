@@ -13,10 +13,8 @@ const cookieParser = require('cookie-parser');
 
 const app = express();
 
-// Trust proxy headers for accurate IP detection in rate limiting
 app.set('trust proxy', 1);
 
-// Security middleware
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -24,18 +22,23 @@ app.use(helmet({
       scriptSrcElem: [
         "'self'",
         "'unsafe-inline'",
+        "blob:",
         "https://cdnjs.cloudflare.com",
         "https://cdn.jsdelivr.net"
       ],
       scriptSrc: [
         "'self'",
         "'unsafe-inline'",
+        "blob:",
         "https://cdnjs.cloudflare.com",
         "https://cdn.jsdelivr.net"
       ],
-      scriptSrcAttr: ["'unsafe-inline'"],
+      workerSrc: [
+        "'self'",
+        "blob:"
+      ],
       styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net"],
-      imgSrc: ["'self'", "data:", "https://cdnjs.cloudflare.com"],
+      imgSrc: ["'self'", "data:", "https://cdnjs.cloudflare.com", "http://localhost:3000"],
       connectSrc: ["'self'", "https://cdn.jsdelivr.net"],
       fontSrc: ["'self'", "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net"],
       objectSrc: ["'none'"],
@@ -43,43 +46,41 @@ app.use(helmet({
       formAction: ["'self'"],
       frameAncestors: ["'none'"],
       upgradeInsecureRequests: [],
+      // scriptSrcAttr: ["'none'"], // Commented out to allow event handlers
+      scriptSrcAttr: ["'unsafe-inline'"],
     },
   },
 }));
 app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json());
 app.use(cookieParser());
 
-// Session middleware must come before CSRF
 app.use(session({
   secret: process.env.SESSION_SECRET || 'your-secret-key',
   resave: false,
   saveUninitialized: true,
   cookie: { 
-    secure: process.env.NODE_ENV === 'production',
+    secure: true, // <-- set to true in production
     httpOnly: true,
     maxAge: 24 * 60 * 60 * 1000 // 24 hours
   }
 }));
 
-// Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 100
 });
 app.use(limiter);
 
-// CSRF protection
 const csrfProtection = csrf({ 
   cookie: {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production'
+    secure: true // <-- set to true in production
   }
 });
 
-// Error handling middleware
 app.use((err, req, res, next) => {
   if (err.code === 'EBADCSRFTOKEN') {
-    // Handle CSRF token errors
     res.status(403).send('CSRF token validation failed');
   } else {
     console.error(err.stack);
@@ -87,7 +88,6 @@ app.use((err, req, res, next) => {
   }
 });
 
-// Configure marked for syntax highlighting
 marked.setOptions({
   highlight: function(code, lang) {
     if (lang && hljs.getLanguage(lang)) {
@@ -104,13 +104,11 @@ marked.setOptions({
   mangle: false
 });
 
-// Ensure snippets directory exists
 const snippetsDir = path.join(__dirname, 'snippets');
 if (!fs.existsSync(snippetsDir)) {
   fs.mkdirSync(snippetsDir);
 }
 
-// Helper function to get all snippets
 const getAllSnippets = () => {
   return fs.readdirSync(snippetsDir)
     .filter(f => f.endsWith('.json'))
@@ -126,33 +124,42 @@ const getAllSnippets = () => {
     .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 };
 
-// Helper function to generate navigation HTML
 const getNavigation = (currentPage) => `
   <nav style="
-    background: #252526;
-    padding: 1em;
+    background: #232323;
+    padding: 1em 2em;
     margin-bottom: 2em;
     border-bottom: 1px solid #333;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    border-radius: 8px 8px 0 0;
+    box-shadow: 0 2px 12px #0006;
   ">
-    <div>
-      <a href="/" style="color: #007acc; text-decoration: none; margin-right: 1em;">Home</a>
-      <a href="/admin" style="color: #007acc; text-decoration: none;">Admin</a>
+    <div style="display: flex; gap: 1.5em;">
+      <a href="/" style="color: ${currentPage === 'home' ? '#fff' : '#7ecfff'}; text-decoration: none; font-weight: bold;">Home</a>
+      <a href="/admin" style="color: ${currentPage === 'admin' ? '#fff' : '#7ecfff'}; text-decoration: none; font-weight: bold;">Admin</a>
     </div>
-    <button onclick="showQuickSnippetDialog()" style="
+    <button id="quick-snippet-btn" style="
       background: #007acc;
       color: white;
       border: none;
-      padding: 0.5em 1em;
+      padding: 0.5em 1.2em;
       border-radius: 4px;
       cursor: pointer;
-    ">Quick Snippet</button>
+      font-size: 1em;
+      font-weight: bold;
+      box-shadow: 0 2px 8px #0003;
+      width: auto;
+      min-width: 180px;
+      height: 2.5em;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    ">+ Quick Snippet</button>
   </nav>
 `;
 
-// Helper function to generate quick snippet dialog HTML
 const getQuickSnippetDialog = (csrfToken) => `
   <div id="quickSnippetDialog" style="
     display: none;
@@ -195,7 +202,7 @@ const getQuickSnippetDialog = (csrfToken) => `
           font-family: monospace;
         "></textarea>
         <div style="display: flex; gap: 1em; justify-content: flex-end;">
-          <button type="button" onclick="hideQuickSnippetDialog()" style="
+          <button type="button" id="quick-cancel-btn" style="
             padding: 0.5em 1em;
             background: #666;
             color: white;
@@ -216,32 +223,198 @@ const getQuickSnippetDialog = (csrfToken) => `
     </div>
   </div>
   <script>
+    async function refreshCsrfToken() {
+      const res = await fetch('/get-csrf', { credentials: 'same-origin' });
+      const data = await res.json();
+      document.querySelectorAll('input[name="_csrf"]').forEach(input => {
+        input.value = data.csrfToken;
+      });
+    }
+
     function showQuickSnippetDialog() {
-      document.getElementById('quickSnippetDialog').style.display = 'block';
+      refreshCsrfToken().then(() => {
+        document.getElementById('quickSnippetDialog').style.display = 'block';
+      });
     }
     function hideQuickSnippetDialog() {
       document.getElementById('quickSnippetDialog').style.display = 'none';
     }
-    // Close dialog when clicking outside
-    document.getElementById('quickSnippetDialog').addEventListener('click', function(e) {
-      if (e.target === this) {
-        hideQuickSnippetDialog();
+    document.addEventListener('DOMContentLoaded', function() {
+      const quickBtn = document.getElementById('quick-snippet-btn');
+      if (quickBtn) quickBtn.addEventListener('click', showQuickSnippetDialog);
+      const quickCancel = document.getElementById('quick-cancel-btn');
+      if (quickCancel) quickCancel.addEventListener('click', hideQuickSnippetDialog);
+      const dialog = document.getElementById('quickSnippetDialog');
+      if (dialog) {
+        dialog.addEventListener('click', function(e) {
+          if (e.target === this) hideQuickSnippetDialog();
+        });
       }
     });
   </script>
 `;
 
-// Root route - serve the form
 app.get('/', csrfProtection, (req, res) => {
-  const formHtml = fs.readFileSync(path.join(__dirname, 'public', 'form.html'), 'utf-8');
-  const html = formHtml
-    .replace('{{csrfToken}}', req.csrfToken())
-    .replace('</body>', `${getQuickSnippetDialog(req.csrfToken())}</body>`)
-    .replace('<body>', '<body>' + getNavigation('home'));
-  res.send(html);
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>New Snippet</title>
+      <style>
+        body { font-family: 'Consolas', 'Monaco', monospace; background: #1e1e1e; color: #eee; padding: 2em; }
+        .container { max-width: 900px; margin: 0 auto; }
+        .snippet-window {
+          background: #232323;
+          border-radius: 8px;
+          box-shadow: 0 4px 24px #000a;
+          padding: 2em;
+        }
+        label { color: #aaa; font-size: 1em; margin-top: 1em; display: block; }
+        #monaco-snippet { height: 300px; width: 100%; border-radius: 4px; margin-bottom: 1em; }
+        select, button {
+          margin: 1em 0 0.5em 0;
+          padding: 0.7em 1em;
+          background: #252526;
+          color: #eee;
+          border: 1px solid #333;
+          border-radius: 4px;
+          font-size: 1em;
+        }
+        button {
+          background: #007acc;
+          color: white;
+          border: none;
+          cursor: pointer;
+        }
+        .notification {
+          position: fixed;
+          top: 2em;
+          right: 2em;
+          background: #252526;
+          color: #fff;
+          border-radius: 6px;
+          box-shadow: 0 2px 12px #000a;
+          padding: 1em 2em;
+          z-index: 9999;
+          font-size: 1.1em;
+          display: none;
+          align-items: center;
+          gap: 0.7em;
+        }
+        .notification.show {
+          display: flex;
+          animation: fadeIn 0.3s;
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(-20px);}
+          to { opacity: 1; transform: translateY(0);}
+        }
+      </style>
+      <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+      <script>
+        async function refreshCsrfTokenForForm(formId) {
+          const res = await fetch('/get-csrf', { credentials: 'same-origin' });
+          const data = await res.json();
+          document.querySelectorAll(\`#\${formId} input[name="_csrf"]\`).forEach(input => {
+            input.value = data.csrfToken;
+          });
+        }
+      </script>
+    </head>
+    <body>
+      ${getNavigation('home')}
+      <div class="container">
+        <div class="snippet-window">
+          <h2>New Snippet</h2>
+          <form id="snippet-form" autocomplete="off" spellcheck="false">
+            <input type="hidden" name="_csrf" value="${req.csrfToken()}">
+            <label for="language">Language:</label>
+            <select name="language" id="snippet-lang">
+              <option value="plaintext">Plain Text</option>
+              <option value="sql">SQL</option>
+              <option value="powershell">PowerShell</option>
+              <option value="javascript">JavaScript</option>
+              <option value="python">Python</option>
+              <option value="bash">Bash</option>
+            </select>
+            <input type="hidden" name="snippet" id="snippet-hidden">
+            <div id="monaco-snippet"></div>
+            <button type="submit">💾 Save Snippet</button>
+          </form>
+        </div>
+      </div>
+      <div class="notification" id="notif"><span>✅</span><span id="notif-msg"></span></div>
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          const langMap = {
+            plaintext: 'plaintext',
+            sql: 'sql',
+            powershell: 'powershell',
+            javascript: 'javascript',
+            python: 'python',
+            bash: 'shell'
+          };
+          let snippetEditor;
+          require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' }});
+          require(['vs/editor/editor.main'], function () {
+            snippetEditor = monaco.editor.create(document.getElementById('monaco-snippet'), {
+              value: '',
+              language: langMap[document.getElementById('snippet-lang').value] || 'plaintext',
+              theme: 'vs-dark',
+              fontSize: 16,
+              minimap: { enabled: false },
+              automaticLayout: true,
+              scrollBeyondLastLine: false,
+              roundedSelection: false,
+              scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 }
+            });
+            document.getElementById('snippet-lang').addEventListener('change', function() {
+              const newLang = langMap[this.value] || 'plaintext';
+              monaco.editor.setModelLanguage(snippetEditor.getModel(), newLang);
+            });
+
+            document.getElementById('snippet-form').addEventListener('submit', async function(e) {
+              e.preventDefault();
+              document.getElementById('snippet-hidden').value = snippetEditor.getValue();
+              const form = e.target;
+              const params = new URLSearchParams(new FormData(form));
+              try {
+                const res = await fetch('/submit', {
+                  method: 'POST',
+                  headers: { 
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                  },
+                  body: params,
+                  credentials: 'same-origin'
+                });
+                if (res.ok) {
+                  showNotification('Snippet saved!');
+                  snippetEditor.setValue('');
+                  await refreshCsrfTokenForForm('snippet-form');
+                } else {
+                  showNotification('Failed to save snippet', true);
+                }
+              } catch (err) {
+                showNotification('Error: ' + err.message, true);
+              }
+            });
+
+            function showNotification(msg, error) {
+              const notif = document.getElementById('notif');
+              notif.style.background = error ? '#ff5555' : '#252526';
+              document.getElementById('notif-msg').textContent = msg;
+              notif.classList.add('show');
+              setTimeout(() => notif.classList.remove('show'), 2500);
+            }
+          });
+        });
+      </script>
+    </body>
+    </html>
+  `);
 });
 
-// Password protection middleware
 const requireAuth = (req, res, next) => {
   if (req.session.authenticated) {
     next();
@@ -250,7 +423,6 @@ const requireAuth = (req, res, next) => {
   }
 };
 
-// Login page
 app.get('/login', csrfProtection, (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -277,7 +449,6 @@ app.get('/login', csrfProtection, (req, res) => {
   `);
 });
 
-// Login handler
 app.post('/login', csrfProtection, async (req, res) => {
   const correctPassword = process.env.ADMIN_PASSWORD || 'admin123';
   const hashedPassword = await bcrypt.hash(correctPassword, 10);
@@ -290,7 +461,6 @@ app.post('/login', csrfProtection, async (req, res) => {
   }
 });
 
-// Submit snippet
 app.post('/submit', csrfProtection, (req, res) => {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const lang = req.body.language || 'plaintext';
@@ -305,10 +475,13 @@ app.post('/submit', csrfProtection, (req, res) => {
   };
   
   fs.writeFileSync(filepath, JSON.stringify(content, null, 2));
-  res.send('✅ Snippet saved! <a href="/">Back to form</a>');
+  if (req.headers.accept && req.headers.accept.includes('application/json')) {
+    res.json({ success: true, message: 'Snippet saved!' });
+  } else {
+    res.send('✅ Snippet saved! <a href="/">Back to form</a>');
+  }
 });
 
-// Search snippets
 app.get('/search', (req, res) => {
   const query = req.query.q?.toLowerCase() || '';
   const language = req.query.lang?.toLowerCase();
@@ -324,7 +497,6 @@ app.get('/search', (req, res) => {
   res.json(snippets);
 });
 
-// Admin page
 app.get('/admin', requireAuth, csrfProtection, (req, res) => {
   const snippets = getAllSnippets();
   const languages = [...new Set(snippets.map(s => s.language))];
@@ -358,7 +530,36 @@ app.get('/admin', requireAuth, csrfProtection, (req, res) => {
         .delete-btn { background: #ff5555; color: white; border: none; padding: 0.3em 0.7em; border-radius: 3px; cursor: pointer; }
         .delete-btn:hover { background: #ff3333; }
         .no-results { color: #ff5555; text-align: center; margin: 2em 0; }
+        .action-btn {
+          background: #007acc;
+          color: #fff;
+          border: none;
+          border-radius: 4px;
+          padding: 0.3em 0.9em;
+          font-size: 1em;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          gap: 0.3em;
+          transition: background 0.2s;
+        }
+        .action-btn:hover {
+          background: #005fa3;
+        }
+        .snippet-window, .snippet-form, #monaco-snippet {
+          max-width: 900px !important;
+          width: 100% !important;
+        }
       </style>
+      <script>
+        async function refreshCsrfTokenForForm(formId) {
+          const res = await fetch('/get-csrf', { credentials: 'same-origin' });
+          const data = await res.json();
+          document.querySelectorAll(\`#\${formId} input[name="_csrf"]\`).forEach(input => {
+            input.value = data.csrfToken;
+          });
+        }
+      </script>
     </head>
     <body>
       ${getNavigation('admin')}
@@ -396,9 +597,10 @@ app.get('/admin', requireAuth, csrfProtection, (req, res) => {
                 <td>${s.language}</td>
                 <td>${s.timestamp.replace(/T/, ' ').replace(/-/g, '/').slice(0, 19)}</td>
                 <td class="actions">
-                  <a href="/edit?file=${s.filename}">[edit]</a>
-                  <a href="/view?file=${s.filename}" target="_blank">[view]</a>
-                  <button class="delete-btn" data-filename="${s.filename}">[delete]</button>
+                  <a href="/edit?file=${encodeURIComponent(s.filename)}">[edit]</a>
+                  <a href="/view?file=${encodeURIComponent(s.filename)}" target="_blank">[view]</a>
+                  <a href="#" class="delete-link" data-filename="${encodeURIComponent(s.filename)}">[delete]</a>
+                  <a href="#" class="download-link" data-filename="${encodeURIComponent(s.filename)}" data-language="${s.language}">[download]</a>
                 </td>
               </tr>
             `).join('')}
@@ -408,115 +610,247 @@ app.get('/admin', requireAuth, csrfProtection, (req, res) => {
         <p><a href="/">Back to form</a></p>
       </div>
       ${getQuickSnippetDialog(req.csrfToken())}
+      <form id="admin-form" style="display:none;">
+        <input type="hidden" name="_csrf" value="${req.csrfToken()}">
+      </form>
       <script>
-        const searchInput = document.getElementById('search');
-        const languageSelect = document.getElementById('language');
-        const sortSelect = document.getElementById('sort');
-        const snippetList = document.getElementById('snippet-list');
-        const noResults = document.getElementById('no-results');
+        document.addEventListener('DOMContentLoaded', function() {
+          const searchInput = document.getElementById('search');
+          const languageSelect = document.getElementById('language');
+          const sortSelect = document.getElementById('sort');
+          const snippetList = document.getElementById('snippet-list');
+          const noResults = document.getElementById('no-results');
 
-        async function updateList() {
-          const query = searchInput.value;
-          const language = languageSelect.value;
-          const response = await fetch('/search?q=' + encodeURIComponent(query) + '&lang=' + encodeURIComponent(language));
-          let snippets = await response.json();
+          console.log('DOMContentLoaded');
+          console.log('snippetList:', snippetList);
 
-          // Sorting
-          const sort = sortSelect.value;
-          snippets = snippets.sort((a, b) => {
-            if (sort === 'date-desc') return b.timestamp.localeCompare(a.timestamp);
-            if (sort === 'date-asc') return a.timestamp.localeCompare(b.timestamp);
-            if (sort === 'lang-asc') return a.language.localeCompare(b.language);
-            if (sort === 'lang-desc') return b.language.localeCompare(a.language);
-            return 0;
-          });
+          async function updateList() {
+            const query = searchInput.value;
+            const language = languageSelect.value;
+            const response = await fetch('/search?q=' + encodeURIComponent(query) + '&lang=' + encodeURIComponent(language));
+            let snippets = await response.json();
 
-          if (snippets.length === 0) {
-            snippetList.innerHTML = '';
-            noResults.style.display = '';
-          } else {
-            noResults.style.display = 'none';
-            snippetList.innerHTML = snippets.map(function(s) {
-              return '<tr>' +
-                '<td>' + s.filename + '</td>' +
-                '<td>' + s.language + '</td>' +
-                '<td>' + s.timestamp.replace(/T/, ' ').replace(/-/g, '/').slice(0, 19) + '</td>' +
-                '<td class="actions">' +
-                  '<a href="/edit?file=' + encodeURIComponent(s.filename) + '">[edit]</a>' +
-                  '<a href="/view?file=' + encodeURIComponent(s.filename) + '" target="_blank">[view]</a>' +
-                  '<button class="delete-btn" data-filename="' + encodeURIComponent(s.filename) + '">[delete]</button>' +
-                '</td>' +
-              '</tr>';
-            }).join('');
-          }
-        }
+            const sort = sortSelect.value;
+            snippets = snippets.sort((a, b) => {
+              if (sort === 'date-desc') return b.timestamp.localeCompare(a.timestamp);
+              if (sort === 'date-asc') return a.timestamp.localeCompare(b.timestamp);
+              if (sort === 'lang-asc') return a.language.localeCompare(b.language);
+              if (sort === 'lang-desc') return b.language.localeCompare(a.language);
+              return 0;
+            });
 
-        searchInput.addEventListener('input', updateList);
-        languageSelect.addEventListener('change', updateList);
-        sortSelect.addEventListener('change', updateList);
-
-        // Delete handler
-        snippetList.addEventListener('click', async (event) => {
-          const target = event.target;
-          if (target.classList.contains('delete-btn')) {
-            event.preventDefault();
-            const filename = target.dataset.filename;
-            if (confirm('Are you sure you want to delete this snippet?')) {
-              const response = await fetch('/delete?file=' + encodeURIComponent(filename), {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'X-CSRF-Token': document.querySelector('input[name="_csrf"]').value
-                }
-              });
-              if (response.ok) updateList();
-              else alert('Failed to delete snippet.');
+            if (snippets.length === 0) {
+              snippetList.innerHTML = '';
+              noResults.style.display = '';
+            } else {
+              noResults.style.display = 'none';
+              snippetList.innerHTML = snippets.map(function(s) {
+                return '<tr>' +
+                  '<td>' + s.filename + '</td>' +
+                  '<td>' + s.language + '</td>' +
+                  '<td>' + s.timestamp.replace(/T/, ' ').replace(/-/g, '/').slice(0, 19) + '</td>' +
+                  '<td class="actions">' +
+                    '<a href="/edit?file=' + encodeURIComponent(s.filename) + '">[edit]</a> ' +
+                    '<a href="/view?file=' + encodeURIComponent(s.filename) + '" target="_blank">[view]</a> ' +
+                    '<a href="#" class="delete-link" data-filename="' + encodeURIComponent(s.filename) + '">[delete]</a> ' +
+                    '<a href="#" class="download-link" data-filename="' + encodeURIComponent(s.filename) + '" data-language="' + s.language + '">[download]</a>' +
+                  '</td>' +
+                '</tr>';
+              }).join('');
             }
           }
-        });
 
-        // Initial load
-        updateList();
+          function attachDeleteHandler() {
+            const snippetList = document.getElementById('snippet-list');
+            snippetList.onclick = async function(event) {
+              const target = event.target;
+              if (target.classList.contains('delete-link')) {
+                event.preventDefault();
+                const filename = decodeURIComponent(target.dataset.filename);
+                if (confirm('Are you sure you want to delete this snippet?')) {
+                  await refreshCsrfTokenForForm('admin-form');
+                  const csrfToken = document.querySelector('#admin-form input[name="_csrf"]').value;
+                  try {
+                    const response = await fetch('/delete', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                      },
+                      body: JSON.stringify({ 
+                        file: filename, 
+                        _csrf: csrfToken 
+                      }),
+                      credentials: 'same-origin'
+                    });
+                    if (response.ok) {
+                      target.closest('tr').remove();
+                      console.log('Snippet deleted successfully');
+                    } else {
+                      const error = await response.json();
+                      alert('Failed to delete snippet: ' + (error.error || 'Unknown error'));
+                    }
+                  } catch (err) {
+                    console.error('Delete error:', err);
+                    alert('Error: ' + err.message);
+                  }
+                }
+              }
+            };
+          }
+
+          searchInput.addEventListener('input', updateList);
+          languageSelect.addEventListener('change', updateList);
+          sortSelect.addEventListener('change', updateList);
+
+          snippetList.addEventListener('click', async (event) => {
+            const target = event.target;
+            if (target.classList.contains('delete-link')) {
+              event.preventDefault();
+              const filename = decodeURIComponent(target.dataset.filename);
+              if (confirm('Are you sure you want to delete this snippet?')) {
+                await refreshCsrfTokenForForm('admin-form');
+                const csrfToken = document.querySelector('#admin-form input[name="_csrf"]').value;
+                try {
+                  const response = await fetch('/delete', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({ 
+                      file: filename, 
+                      _csrf: csrfToken 
+                    }),
+                    credentials: 'same-origin'
+                  });
+                  
+                  if (response.ok) {
+                    target.closest('tr').remove(); // Remove the row from the table
+                    console.log('Snippet deleted successfully');
+                  } else {
+                    const error = await response.json();
+                    alert('Failed to delete snippet: ' + (error.error || 'Unknown error'));
+                  }
+                } catch (err) {
+                  console.error('Delete error:', err);
+                  alert('Error: ' + err.message);
+                }
+              }
+            }
+            if (target.classList.contains('download-link')) {
+              event.preventDefault();
+              const filename = target.dataset.filename;
+              const language = target.dataset.language;
+              try {
+                const res = await fetch('/snippet-raw?file=' + filename);
+                if (!res.ok) throw new Error('Failed to fetch snippet');
+                const data = await res.text();
+                const blob = new Blob([data], { type: 'text/plain' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = decodeURIComponent(filename).replace(/\.json$/, '.' + language);
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+              } catch (err) {
+                alert('Failed to download: ' + err.message);
+              }
+            }
+          });
+
+          window.copySnippet = async function(event, filename) {
+            event.preventDefault();
+            try {
+              const res = await fetch('/snippet-raw?file=' + filename);
+              if (!res.ok) throw new Error('Failed to fetch snippet');
+              const data = await res.text();
+              if (navigator.clipboard) {
+                await navigator.clipboard.writeText(data);
+                alert('Copied to clipboard!');
+              } else {
+                const textarea = document.createElement('textarea');
+                textarea.value = data;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                alert('Copied to clipboard!');
+              }
+            } catch (err) {
+              alert('Failed to copy: ' + err.message);
+            }
+          }
+
+          window.downloadSnippet = async function(event, filename, language) {
+            event.preventDefault();
+            try {
+              const res = await fetch('/snippet-raw?file=' + filename);
+              if (!res.ok) throw new Error('Failed to fetch snippet');
+              const data = await res.text();
+              const blob = new Blob([data], { type: 'text/plain' });
+              const a = document.createElement('a');
+              a.href = URL.createObjectURL(blob);
+              a.download = decodeURIComponent(filename).replace(/\.json$/, '.' + language);
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+            } catch (err) {
+              alert('Failed to download: ' + err.message);
+            }
+          }
+
+          updateList();
+        });
       </script>
     </body>
     </html>
   `);
 });
 
-// Delete snippet
-app.post('/delete', requireAuth, csrfProtection, (req, res) => {
-  console.log('Delete route received request for file:', req.query.file);
-  const filename = req.query.file;
-  if (!filename) {
-    console.error('Delete route: No file specified');
-    return res.status(400).send('No file specified');
-  }
-  
-  const filepath = path.join(snippetsDir, filename);
-  if (!fs.existsSync(filepath)) {
-    console.error('Delete route: File not found', filepath);
-    return res.status(404).send('File not found');
-  }
-  
-  try {
-    fs.unlinkSync(filepath);
-    console.log('Successfully deleted file:', filepath);
-    res.sendStatus(200);
-  } catch (error) {
-    console.error('Error deleting file:', filepath, error);
-    res.status(500).send('Failed to delete file');
-  }
-});
-
-// Edit page
-app.get('/edit', requireAuth, (req, res) => {
+app.get('/snippet-raw', requireAuth, (req, res) => {
   const filename = req.query.file;
   if (!filename) return res.status(400).send('No file specified');
-  const fullPath = path.join(snippetsDir, filename);
+  const fullPath = path.join(snippetsDir, decodeURIComponent(filename));
   if (!fs.existsSync(fullPath)) return res.status(404).send('File not found');
   const content = JSON.parse(fs.readFileSync(fullPath, 'utf-8'));
-  const lang = content.language || 'plaintext';
-  const code = content.code.replace(/<\/script>/g, '<\\/script>'); // Prevent script tag break
+  res.type('text/plain').send(content.code);
+});
+
+app.post('/delete', requireAuth, csrfProtection, (req, res) => {
+    console.log('Delete request received', req.body);
+    const filename = req.body.file;
+    
+    if (!filename) {
+        return res.status(400).json({ error: 'No file specified' });
+    }
+    
+    try {
+        const fullPath = path.join(snippetsDir, decodeURIComponent(filename));
+        
+        if (!fs.existsSync(fullPath)) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+        
+        fs.unlinkSync(fullPath);
+        console.log('File deleted:', fullPath);
+        res.json({ success: true, message: 'File deleted successfully' });
+    } catch (err) {
+        console.error('Delete error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/get-csrf', csrfProtection, (req, res) => {
+  res.json({ csrfToken: req.csrfToken() });
+});
+
+app.get('/edit', requireAuth, csrfProtection, (req, res) => {
+  const filename = req.query.file;
+  if (!filename) return res.status(400).send('No file specified');
+  const fullPath = path.join(snippetsDir, decodeURIComponent(filename));
+  if (!fs.existsSync(fullPath)) return res.status(404).send('File not found');
+  const content = JSON.parse(fs.readFileSync(fullPath, 'utf-8'));
 
   res.send(`
     <!DOCTYPE html>
@@ -524,75 +858,142 @@ app.get('/edit', requireAuth, (req, res) => {
     <head>
       <title>Edit Snippet</title>
       <style>
-        body { font-family: 'Consolas', 'Monaco', monospace; background: #1e1e1e; color: #eee; padding: 2em; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        .editor-window {
-          background: #1e1e1e;
-          border: 1px solid #333;
-          border-radius: 8px 8px 0 0;
-          box-shadow: 0 4px 24px #000a;
-          margin-bottom: 2em;
-        }
-        .editor-header {
-          background: #232323;
-          border-bottom: 1px solid #333;
-          border-radius: 8px 8px 0 0;
-          padding: 0.5em 1em;
-          display: flex;
-          align-items: center;
-          gap: 0.5em;
-        }
-        .editor-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
-        .dot-red { background: #ff5f56; }
-        .dot-yellow { background: #ffbd2e; }
-        .dot-green { background: #27c93f; }
-        .editor-title { margin-left: 1em; color: #bbb; font-size: 1em; flex: 1; }
-        .editor-label { color: #aaa; font-size: 0.95em; margin-top: 1em; }
-        #monaco { height: 400px; width: 100%; border-radius: 0 0 8px 8px; margin-bottom: 1em; }
-        form { margin-bottom: 0; }
+        body { font-family: monospace; background: #1e1e1e; color: #eee; padding: 2em; }
+        .container { max-width: 900px; margin: 0 auto; }
+        .snippet-window { background: #232323; border-radius: 8px; box-shadow: 0 4px 24px #000a; padding: 2em; }
+        label { color: #aaa; font-size: 1em; margin-top: 1em; display: block; }
         select, button {
-          margin: 1em 0 0.5em 0;
-          padding: 0.7em 1em;
-          background: #252526;
-          color: #eee;
-          border: 1px solid #333;
-          border-radius: 4px;
-          font-size: 1em;
+          width: 100%; margin: 1em 0 0.5em 0; padding: 0.7em 1em;
+          background: #252526; color: #eee; border: 1px solid #333; border-radius: 4px; font-size: 1em;
         }
-        button {
-          background: #007acc;
-          color: white;
-          border: none;
-          cursor: pointer;
-        }
+        #monaco-snippet { height: 300px; width: 100%; border-radius: 4px; margin-bottom: 1em; }
+        button { background: #007acc; color: white; border: none; cursor: pointer; }
       </style>
       <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
     </head>
     <body>
+      ${getNavigation('admin')}
       <div class="container">
-        <div class="editor-window">
-          <div class="editor-header">
-            <span class="editor-dot dot-red"></span>
-            <span class="editor-dot dot-yellow"></span>
-            <span class="editor-dot dot-green"></span>
-            <span class="editor-title">${filename}</span>
-          </div>
-          <label class="editor-label" for="lang-select">Language:</label>
-          <select name="language" id="lang-select" style="width:200px;">
-            <option value="plaintext" ${lang === 'plaintext' ? 'selected' : ''}>Plain Text</option>
-            <option value="sql" ${lang === 'sql' ? 'selected' : ''}>SQL</option>
-            <option value="powershell" ${lang === 'powershell' ? 'selected' : ''}>PowerShell</option>
-            <option value="javascript" ${lang === 'javascript' ? 'selected' : ''}>JavaScript</option>
-            <option value="python" ${lang === 'python' ? 'selected' : ''}>Python</option>
-            <option value="bash" ${lang === 'bash' ? 'selected' : ''}>Bash</option>
-          </select>
-          <div id="monaco"></div>
-          <form method="POST" action="/save-edit" autocomplete="off" spellcheck="false" onsubmit="return submitMonaco()">
-            <input type="hidden" name="filename" value="${filename}">
-            <input type="hidden" name="language" id="hidden-language" value="${lang}">
+        <div class="snippet-window">
+          <h2>Edit Snippet</h2>
+          <form id="edit-form" autocomplete="off" spellcheck="false">
+            <input type="hidden" name="_csrf" value="${req.csrfToken()}">
+            <label for="language">Language:</label>
+            <select name="language" id="snippet-lang">
+              <option value="plaintext"${content.language === 'plaintext' ? ' selected' : ''}>Plain Text</option>
+              <option value="sql"${content.language === 'sql' ? ' selected' : ''}>SQL</option>
+              <option value="powershell"${content.language === 'powershell' ? ' selected' : ''}>PowerShell</option>
+              <option value="javascript"${content.language === 'javascript' ? ' selected' : ''}>JavaScript</option>
+              <option value="python"${content.language === 'python' ? ' selected' : ''}>Python</option>
+              <option value="bash"${content.language === 'bash' ? ' selected' : ''}>Bash</option>
+            </select>
             <input type="hidden" name="snippet" id="snippet-hidden">
+            <div id="monaco-snippet"></div>
             <button type="submit">💾 Save Changes</button>
           </form>
+        </div>
+      </div>
+      ${getQuickSnippetDialog(req.csrfToken())}
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          const langMap = {
+            plaintext: 'plaintext',
+            sql: 'sql',
+            powershell: 'powershell',
+            javascript: 'javascript',
+            python: 'python',
+            bash: 'shell'
+          };
+          let snippetEditor;
+          require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' }});
+          require(['vs/editor/editor.main'], function () {
+            snippetEditor = monaco.editor.create(document.getElementById('monaco-snippet'), {
+              value: ${JSON.stringify(content.code)},
+              language: langMap["${content.language}"] || 'plaintext',
+              theme: 'vs-dark',
+              fontSize: 16,
+              minimap: { enabled: false },
+              automaticLayout: true,
+              scrollBeyondLastLine: false,
+              roundedSelection: false,
+              scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 }
+            });
+            document.getElementById('snippet-lang').addEventListener('change', function() {
+              const newLang = langMap[this.value] || 'plaintext';
+              monaco.editor.setModelLanguage(snippetEditor.getModel(), newLang);
+            });
+
+            document.getElementById('edit-form').addEventListener('submit', function(e) {
+              e.preventDefault();
+              document.getElementById('snippet-hidden').value = snippetEditor.getValue();
+              const form = e.target;
+              const params = new URLSearchParams(new FormData(form));
+              fetch('/edit?file=${encodeURIComponent(filename)}', {
+                method: 'POST',
+                headers: { 
+                  'Accept': 'text/html,application/xhtml+xml,application/xml',
+                  'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: params,
+                credentials: 'same-origin'
+              }).then(res => {
+                if (res.redirected) {
+                  window.location.href = res.url;
+                } else {
+                  alert('Failed to save changes');
+                }
+              });
+            });
+          });
+        });
+      </script>
+    </body>
+    </html>
+  `);
+});
+
+app.post('/edit', requireAuth, csrfProtection, (req, res) => {
+  const filename = req.query.file;
+  if (!filename) return res.status(400).send('No file specified');
+  const fullPath = path.join(snippetsDir, decodeURIComponent(filename));
+  if (!fs.existsSync(fullPath)) return res.status(404).send('File not found');
+  const content = JSON.parse(fs.readFileSync(fullPath, 'utf-8'));
+  content.language = req.body.language || content.language;
+  content.code = req.body.snippet || content.code;
+  fs.writeFileSync(fullPath, JSON.stringify(content, null, 2));
+  res.redirect('/admin');
+});
+
+app.get('/view', requireAuth, (req, res) => {
+  const filename = req.query.file;
+  if (!filename) return res.status(400).send('No file specified');
+  const fullPath = path.join(snippetsDir, decodeURIComponent(filename));
+  if (!fs.existsSync(fullPath)) return res.status(404).send('File not found');
+  const content = JSON.parse(fs.readFileSync(fullPath, 'utf-8'));
+
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>View Snippet - ${filename}</title>
+      <style>
+        body { font-family: monospace; background: #1e1e1e; color: #eee; padding: 2em; }
+        .container { max-width: 900px; margin: 0 auto; }
+        .snippet-window { background: #232323; border-radius: 8px; box-shadow: 0 4px 24px #000a; padding: 2em; }
+        #monaco-viewer { height: 400px; width: 100%; border-radius: 4px; margin-bottom: 1em; }
+        h2 { margin-top: 0; }
+        a { color: #7ecfff; }
+      </style>
+      <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+    </head>
+    <body>
+      ${getNavigation('admin')}
+      <div class="container">
+        <div class="snippet-window">
+          <h2>${filename}</h2>
+          <p><strong>Language:</strong> ${content.language}</p>
+          <div id="monaco-viewer"></div>
+          <p><a href="/admin">Back to Admin</a></p>
         </div>
       </div>
       <script>
@@ -605,127 +1006,22 @@ app.get('/edit', requireAuth, (req, res) => {
             python: 'python',
             bash: 'shell'
           };
-          let editor;
           require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' }});
           require(['vs/editor/editor.main'], function () {
-            editor = monaco.editor.create(document.getElementById('monaco'), {
-              value: \`${code.replace(/\\/g, '\\\\').replace(/`/g, '\\`')}\`,
-              language: langMap['${lang}'] || 'plaintext',
+            monaco.editor.create(document.getElementById('monaco-viewer'), {
+              value: ${JSON.stringify(content.code)},
+              language: langMap["${content.language}"] || 'plaintext',
               theme: 'vs-dark',
               fontSize: 16,
               minimap: { enabled: false },
               automaticLayout: true,
               scrollBeyondLastLine: false,
               roundedSelection: false,
-              scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 }
+              scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
+              readOnly: true,
+              lineNumbers: "on"
             });
-            document.getElementById('lang-select').addEventListener('change', function() {
-              const newLang = langMap[this.value] || 'plaintext';
-              monaco.editor.setModelLanguage(editor.getModel(), newLang);
-              document.getElementById('hidden-language').value = this.value;
-            });
-            window.submitMonaco = function() {
-              document.getElementById('snippet-hidden').value = editor.getValue();
-              document.getElementById('hidden-language').value = document.getElementById('lang-select').value;
-              return true;
-            }
           });
-        });
-      </script>
-    </body>
-    </html>
-  `);
-});
-
-// Save edit
-app.post('/save-edit', requireAuth, (req, res) => {
-  const { filename, language, snippet } = req.body;
-  if (!filename) return res.status(400).send('Missing filename');
-
-  const content = {
-    language: language,
-    code: snippet,
-    timestamp: filename.replace('.json', '')
-  };
-  
-  const fullPath = path.join(snippetsDir, filename);
-  fs.writeFileSync(fullPath, JSON.stringify(content, null, 2));
-  res.redirect('/admin');
-});
-
-// View snippet
-app.get('/view', (req, res) => {
-  const filename = req.query.file;
-  if (!filename) return res.status(400).send('No file specified');
-  
-  const fullPath = path.join(snippetsDir, filename);
-  if (!fs.existsSync(fullPath)) return res.status(404).send('File not found');
-
-  const content = JSON.parse(fs.readFileSync(fullPath, 'utf-8'));
-  const lang = content.language || 'plaintext';
-  const code = content.code;
-
-  res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>${filename}</title>
-      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs2015.min.css">
-      <style>
-        body { font-family: 'Consolas', 'Monaco', monospace; background: #1e1e1e; color: #eee; padding: 2em; }
-        .container { max-width: 900px; margin: 0 auto; }
-        .code-block { background: #1e1e1e; border: 1px solid #333; border-radius: 4px; display: flex; }
-        .line-numbers {
-          background: #232323;
-          color: #444;
-          padding: 1em 0.5em;
-          text-align: right;
-          user-select: none;
-          min-width: 3em;
-          border-right: 1px solid #333;
-        }
-        .code-content {
-          padding: 1em;
-          overflow-x: auto;
-          width: 100%;
-        }
-        .hljs {
-          background: transparent !important;
-        }
-      </style>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/powershell.min.js"></script>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
-    </head>
-    <body>
-      ${getNavigation('view')}
-      <div class="container">
-        <h1>${filename}</h1>
-        <div class="code-block">
-          <div class="line-numbers" id="line-numbers"></div>
-          <div class="code-content">
-            <pre style="margin:0;"><code id="code" class="hljs language-${lang}"></code></pre>
-          </div>
-        </div>
-      </div>
-      <script>
-        function escapeHtml(text) {
-          return text.replace(/[&<>"']/g, function(m) {
-            return ({
-              '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-            })[m];
-          });
-        }
-        document.addEventListener('DOMContentLoaded', function() {
-          const code = \`${code.replace(/`/g, '\\`')}\`;
-          const lines = code.split('\\n');
-          document.getElementById('line-numbers').innerHTML = lines.map((_, i) => i + 1).join('<br>');
-          const codeElem = document.getElementById('code');
-          codeElem.textContent = code;
-          hljs.highlightElement(codeElem);
         });
       </script>
     </body>
@@ -735,3 +1031,4 @@ app.get('/view', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+console.log('Admin JS loaded');
