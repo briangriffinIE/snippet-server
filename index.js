@@ -758,6 +758,54 @@ app.get('/admin', requireAuth, csrfProtection, async (req, res) => {
               alert('Error deleting snippet: ' + err.message);
             }
           }
+
+          if (target.classList.contains('download-link')) {
+            event.preventDefault();
+            const filename = decodeURIComponent(target.dataset.filename);
+            const language = target.dataset.language || 'txt';
+
+            try {
+              const res = await fetch('/snippet-raw?file=' + encodeURIComponent(filename), {
+                credentials: 'same-origin'
+              });
+              if (!res.ok) {
+                alert('Failed to fetch snippet for download');
+                return;
+              }
+              const code = await res.text();
+
+              // Determine file extension
+              const extMap = {
+                plaintext: 'txt',
+                sql: 'sql',
+                powershell: 'ps1',
+                javascript: 'js',
+                python: 'py',
+                bash: 'sh'
+              };
+              const ext = extMap[language] || 'txt';
+
+              // Compose download filename
+              let base = filename.replace(/\.json$/, '');
+              base = base.replace(/[:\/\\]/g, '-'); // sanitize
+              const downloadName = \`\${base}.\${ext}\`;
+
+              // Create and trigger download
+              const blob = new Blob([code], { type: 'text/plain' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = downloadName;
+              document.body.appendChild(a);
+              a.click();
+              setTimeout(() => {
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+              }, 100);
+            } catch (err) {
+              alert('Error downloading snippet: ' + err.message);
+            }
+          }
         });
 
         // Save changes handler for the modal
