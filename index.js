@@ -859,11 +859,17 @@ app.get('/edit', requireAuth, csrfProtection, async (req, res) => {
               monaco.editor.setModelLanguage(snippetEditor.getModel(), newLang);
             });
 
-            document.getElementById('edit-form').addEventListener('submit', function(e) {
+            document.getElementById('edit-form').addEventListener('submit', async function(e) {
               e.preventDefault();
               document.getElementById('snippet-hidden').value = snippetEditor.getValue();
               const form = e.target;
               const params = new URLSearchParams(new FormData(form));
+              
+              // Refresh CSRF token before submission
+              await refreshCsrfTokenForForm('edit-form');
+              const csrfToken = document.querySelector('#edit-form input[name="_csrf"]').value;
+              params.append('_csrf', csrfToken);
+
               fetch('/edit?file=${encodeURIComponent(filename)}', {
                 method: 'POST',
                 headers: { 
