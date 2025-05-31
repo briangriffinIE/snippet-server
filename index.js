@@ -597,7 +597,7 @@ app.get('/admin', requireAuth, csrfProtection, async (req, res) => {
               <tr>
                 <td>${s.filename}</td>
                 <td>${s.language}</td>
-                <td>${s.timestamp.replace(/T/, ' ').replace(/-/g, '/').slice(0, 19)}</td>
+                <td>${formatTimestamp(s.timestamp)}</td>
                 <td class="actions">
                   <a href="/edit?file=${encodeURIComponent(s.filename)}">[edit]</a>
                   <a href="/view?file=${encodeURIComponent(s.filename)}" target="_blank">[view]</a>
@@ -1020,6 +1020,12 @@ app.get('/view', requireAuth, async (req, res) => {
     </html>
   `);
 });
+
+function formatTimestamp(ts) {
+  if (!ts) return '';
+  if (ts instanceof Date) ts = ts.toISOString();
+  return ts.replace(/T/, ' ').replace(/-/g, '/').slice(0, 19);
+}
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
