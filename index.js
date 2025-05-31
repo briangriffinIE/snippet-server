@@ -716,7 +716,9 @@ app.get('/admin', requireAuth, csrfProtection, async (req, res) => {
             credentials: 'same-origin'
           });
           if (res.redirected) {
-            window.location.reload();
+            window.location.href = res.url; // <-- This will reload the admin page and show the updated snippet
+          } else if (res.ok) {
+            window.location.reload(); // fallback: reload the page to reflect changes
           } else {
             alert('Failed to save changes');
           }
