@@ -696,6 +696,36 @@ app.get('/admin', requireAuth, csrfProtection, async (req, res) => {
             monaco.editor.setModelLanguage(monacoInstance.getModel(), langMap[this.value] || 'plaintext');
           }
         };
+
+        // Add this event listener to handle [edit] and [view] links
+        document.getElementById('snippet-list').addEventListener('click', async function(event) {
+          const target = event.target;
+          if (target.textContent === '[edit]') {
+            event.preventDefault();
+            const filename = target.href.split('file=')[1];
+            currentEditFilename = filename;
+            // Fetch snippet data
+            const res = await fetch('/snippet-raw?file=' + filename);
+            const code = await res.text();
+            // Fetch language
+            const row = target.closest('tr');
+            const language = row ? row.children[1].textContent : 'plaintext';
+            showModal('Edit Snippet', code, language, true);
+          }
+          if (target.textContent === '[view]') {
+            event.preventDefault();
+            const filename = target.href.split('file=')[1];
+            currentEditFilename = filename;
+            const res = await fetch('/snippet-raw?file=' + filename);
+            const code = await res.text();
+            // Fetch language
+            const row = target.closest('tr');
+            const language = row ? row.children[1].textContent : 'plaintext';
+            showModal('View Snippet', code, language, false);
+          }
+        });
+
+        // Save changes handler for the modal
         document.getElementById('save-edit').onclick = async function() {
           if (!monacoInstance) {
             alert('Editor not ready');
@@ -723,33 +753,6 @@ app.get('/admin', requireAuth, csrfProtection, async (req, res) => {
             alert('Failed to save changes');
           }
         };
-
-        document.getElementById('snippet-list').addEventListener('click', async function(event) {
-          const target = event.target;
-          if (target.textContent === '[view]') {
-            event.preventDefault();
-            const filename = target.href.split('file=')[1];
-            currentEditFilename = filename;
-            const res = await fetch('/snippet-raw?file=' + filename);
-            const code = await res.text();
-            // Fetch language
-            const row = target.closest('tr');
-            const language = row ? row.children[1].textContent : 'plaintext';
-            showModal('View Snippet', code, language, false);
-          }
-          if (target.textContent === '[edit]') {
-            event.preventDefault();
-            const filename = target.href.split('file=')[1];
-            currentEditFilename = filename;
-            // Fetch snippet data
-            const res = await fetch('/snippet-raw?file=' + filename);
-            const code = await res.text();
-            // Fetch language
-            const row = target.closest('tr');
-            const language = row ? row.children[1].textContent : 'plaintext';
-            showModal('Edit Snippet', code, language, true);
-          }
-        });
       </script>
     </body>
     </html>
