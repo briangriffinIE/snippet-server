@@ -10,6 +10,7 @@ const rateLimit = require('express-rate-limit');
 const csrf = require('csurf');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
+const { Pool } = require('pg');
 
 const app = express();
 
@@ -109,19 +110,9 @@ if (!fs.existsSync(snippetsDir)) {
   fs.mkdirSync(snippetsDir);
 }
 
-const getAllSnippets = () => {
-  return fs.readdirSync(snippetsDir)
-    .filter(f => f.endsWith('.json'))
-    .map(filename => {
-      const content = JSON.parse(fs.readFileSync(path.join(snippetsDir, filename), 'utf-8'));
-      return {
-        filename,
-        language: content.language || 'plaintext',
-        content: content.code,
-        timestamp: filename.replace('.json', '')
-      };
-    })
-    .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+const getAllSnippets = async () => {
+  const { rows } = await pool.query('SELECT * FROM snippets ORDER BY timestamp DESC');
+  return rows;
 };
 
 const getNavigation = (currentPage) => `
@@ -461,40 +452,51 @@ app.post('/login', csrfProtection, async (req, res) => {
   }
 });
 
-app.post('/submit', csrfProtection, (req, res) => {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+app.post('/submit', csrfProtection, async (req, res) => {
+  const timestamp = new Date().toISOString();
   const lang = req.body.language || 'plaintext';
   const code = req.body.snippet;
   const filename = `${timestamp}.json`;
-  const filepath = path.join(snippetsDir, filename);
 
-  const content = {
-    language: lang,
-    code: code,
-    timestamp: timestamp
-  };
-  
-  fs.writeFileSync(filepath, JSON.stringify(content, null, 2));
-  if (req.headers.accept && req.headers.accept.includes('application/json')) {
-    res.json({ success: true, message: 'Snippet saved!' });
-  } else {
-    res.send('✅ Snippet saved! <a href="/">Back to form</a>');
+  try {
+    await pool.query(
+      'INSERT INTO snippets (filename, language, code, timestamp) VALUES ($1, $2, $3, $4)',
+      [filename, lang, code, timestamp]
+    );
+    if (req.headers.accept && req.headers.accept.includes('application/json')) {
+      res.json({ success: true, message: 'Snippet saved!' });
+    } else {
+      res.send('✅ Snippet saved! <a href="/">Back to form</a>');
+    }
+  } catch (err) {
+    console.error('DB insert error:', err);
+    res.status(500).send('Failed to save snippet');
   }
 });
 
-app.get('/search', (req, res) => {
+app.get('/search', async (req, res) => {
   const query = req.query.q?.toLowerCase() || '';
   const language = req.query.lang?.toLowerCase();
   
-  const snippets = getAllSnippets().filter(snippet => {
-    const matchesQuery = query === '' || 
-      snippet.content.toLowerCase().includes(query) ||
-      snippet.filename.toLowerCase().includes(query);
-    const matchesLanguage = !language || snippet.language.toLowerCase() === language;
-    return matchesQuery && matchesLanguage;
-  });
+  let sql = 'SELECT * FROM snippets';
+  let params = [];
+  let conditions = [];
 
-  res.json(snippets);
+  if (query) {
+    conditions.push('(LOWER(code) LIKE $1 OR LOWER(filename) LIKE $1)');
+    params.push(`%${query}%`);
+  }
+  if (language) {
+    conditions.push('LOWER(language) = $' + (params.length + 1));
+    params.push(language);
+  }
+  if (conditions.length) {
+    sql += ' WHERE ' + conditions.join(' AND ');
+  }
+  sql += ' ORDER BY timestamp DESC';
+
+  const { rows } = await pool.query(sql, params);
+  res.json(rows);
 });
 
 app.get('/admin', requireAuth, csrfProtection, (req, res) => {
@@ -695,7 +697,7 @@ app.get('/admin', requireAuth, csrfProtection, (req, res) => {
                     alert('Error: ' + err.message);
                   }
                 }
-              }
+              };
             };
           }
 
@@ -808,49 +810,37 @@ app.get('/admin', requireAuth, csrfProtection, (req, res) => {
   `);
 });
 
-app.get('/snippet-raw', requireAuth, (req, res) => {
+app.get('/snippet-raw', requireAuth, async (req, res) => {
   const filename = req.query.file;
   if (!filename) return res.status(400).send('No file specified');
-  const fullPath = path.join(snippetsDir, decodeURIComponent(filename));
-  if (!fs.existsSync(fullPath)) return res.status(404).send('File not found');
-  const content = JSON.parse(fs.readFileSync(fullPath, 'utf-8'));
-  res.type('text/plain').send(content.code);
+  const { rows } = await pool.query('SELECT code FROM snippets WHERE filename = $1', [filename]);
+  if (!rows.length) return res.status(404).send('File not found');
+  res.type('text/plain').send(rows[0].code);
 });
 
-app.post('/delete', requireAuth, csrfProtection, (req, res) => {
-    console.log('Delete request received', req.body);
-    const filename = req.body.file;
-    
-    if (!filename) {
-        return res.status(400).json({ error: 'No file specified' });
-    }
-    
-    try {
-        const fullPath = path.join(snippetsDir, decodeURIComponent(filename));
-        
-        if (!fs.existsSync(fullPath)) {
-            return res.status(404).json({ error: 'File not found' });
-        }
-        
-        fs.unlinkSync(fullPath);
-        console.log('File deleted:', fullPath);
-        res.json({ success: true, message: 'File deleted successfully' });
-    } catch (err) {
-        console.error('Delete error:', err);
-        res.status(500).json({ error: err.message });
-    }
+app.post('/delete', requireAuth, csrfProtection, async (req, res) => {
+  const filename = req.body.file;
+  if (!filename) return res.status(400).json({ error: 'No file specified' });
+  try {
+    const result = await pool.query('DELETE FROM snippets WHERE filename = $1', [filename]);
+    if (result.rowCount === 0) return res.status(404).json({ error: 'File not found' });
+    res.json({ success: true, message: 'File deleted successfully' });
+  } catch (err) {
+    console.error('Delete error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/get-csrf', csrfProtection, (req, res) => {
   res.json({ csrfToken: req.csrfToken() });
 });
 
-app.get('/edit', requireAuth, csrfProtection, (req, res) => {
+app.get('/edit', requireAuth, csrfProtection, async (req, res) => {
   const filename = req.query.file;
   if (!filename) return res.status(400).send('No file specified');
-  const fullPath = path.join(snippetsDir, decodeURIComponent(filename));
-  if (!fs.existsSync(fullPath)) return res.status(404).send('File not found');
-  const content = JSON.parse(fs.readFileSync(fullPath, 'utf-8'));
+  const { rows } = await pool.query('SELECT * FROM snippets WHERE filename = $1', [filename]);
+  if (!rows.length) return res.status(404).send('File not found');
+  const content = rows[0];
 
   res.send(`
     <!DOCTYPE html>
@@ -952,24 +942,26 @@ app.get('/edit', requireAuth, csrfProtection, (req, res) => {
   `);
 });
 
-app.post('/edit', requireAuth, csrfProtection, (req, res) => {
+app.post('/edit', requireAuth, csrfProtection, async (req, res) => {
   const filename = req.query.file;
   if (!filename) return res.status(400).send('No file specified');
-  const fullPath = path.join(snippetsDir, decodeURIComponent(filename));
-  if (!fs.existsSync(fullPath)) return res.status(404).send('File not found');
-  const content = JSON.parse(fs.readFileSync(fullPath, 'utf-8'));
-  content.language = req.body.language || content.language;
-  content.code = req.body.snippet || content.code;
-  fs.writeFileSync(fullPath, JSON.stringify(content, null, 2));
-  res.redirect('/admin');
+  try {
+    await pool.query(
+      'UPDATE snippets SET language = $1, code = $2 WHERE filename = $3',
+      [req.body.language, req.body.snippet, filename]
+    );
+    res.redirect('/admin');
+  } catch (err) {
+    res.status(500).send('Failed to update snippet');
+  }
 });
 
-app.get('/view', requireAuth, (req, res) => {
+app.get('/view', requireAuth, async (req, res) => {
   const filename = req.query.file;
   if (!filename) return res.status(400).send('No file specified');
-  const fullPath = path.join(snippetsDir, decodeURIComponent(filename));
-  if (!fs.existsSync(fullPath)) return res.status(404).send('File not found');
-  const content = JSON.parse(fs.readFileSync(fullPath, 'utf-8'));
+  const { rows } = await pool.query('SELECT * FROM snippets WHERE filename = $1', [filename]);
+  if (!rows.length) return res.status(404).send('File not found');
+  const content = rows[0];
 
   res.send(`
     <!DOCTYPE html>
@@ -1032,3 +1024,17 @@ app.get('/view', requireAuth, (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 console.log('Admin JS loaded');
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL, // Vercel env var
+  ssl: { rejectUnauthorized: false } // Neon requires SSL
+});
+
+// Example: test connection
+pool.query('SELECT NOW()', (err, res) => {
+  if (err) {
+    console.error('Postgres connection error:', err);
+  } else {
+    console.log('Postgres connected:', res.rows[0]);
+  }
+});
