@@ -639,7 +639,7 @@ app.get('/admin', requireAuth, csrfProtection, async (req, res) => {
       </div>
       <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
       <script>
-        let monacoInstance, currentEditFilename = null, isEditMode = false;
+        let monacoInstance = null, currentEditFilename = null, isEditMode = false;
         const langMap = {
           plaintext: 'plaintext',
           sql: 'sql',
@@ -648,6 +648,7 @@ app.get('/admin', requireAuth, csrfProtection, async (req, res) => {
           python: 'python',
           bash: 'shell'
         };
+
         function showModal(title, code, language, editable) {
           document.getElementById('modal-title').textContent = title;
           document.getElementById('modal-language').value = language;
@@ -657,7 +658,10 @@ app.get('/admin', requireAuth, csrfProtection, async (req, res) => {
           isEditMode = editable;
           require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' }});
           require(['vs/editor/editor.main'], function () {
-            if (monacoInstance) monacoInstance.dispose();
+            if (monacoInstance) {
+              monacoInstance.dispose();
+              monacoInstance = null;
+            }
             monacoInstance = monaco.editor.create(document.getElementById('monaco-modal'), {
               value: code,
               language: langMap[language] || 'plaintext',
@@ -673,16 +677,25 @@ app.get('/admin', requireAuth, csrfProtection, async (req, res) => {
             });
           });
         }
+
         document.getElementById('close-modal').onclick = () => {
           document.getElementById('snippet-modal').style.display = 'none';
-          if (monacoInstance) monacoInstance.dispose();
+          if (monacoInstance) {
+            monacoInstance.dispose();
+            monacoInstance = null;
+          }
         };
+
         document.getElementById('modal-language').onchange = function() {
           if (monacoInstance) {
             monaco.editor.setModelLanguage(monacoInstance.getModel(), langMap[this.value] || 'plaintext');
           }
         };
         document.getElementById('save-edit').onclick = async function() {
+          if (!monacoInstance) {
+            alert('Editor not ready');
+            return;
+          }
           const code = monacoInstance.getValue();
           const language = document.getElementById('modal-language').value;
           await refreshCsrfTokenForForm('admin-form');
@@ -703,6 +716,7 @@ app.get('/admin', requireAuth, csrfProtection, async (req, res) => {
             alert('Failed to save changes');
           }
         };
+
         document.getElementById('snippet-list').addEventListener('click', async function(event) {
           const target = event.target;
           if (target.textContent === '[view]') {
