@@ -702,8 +702,10 @@ app.get('/admin', requireAuth, csrfProtection, async (req, res) => {
           const target = event.target;
           if (target.textContent === '[edit]') {
             event.preventDefault();
-            const filename = target.href.split('file=')[1];
+            const filename = decodeURIComponent(target.href.split('file=')[1]);
             currentEditFilename = filename;
+            // Debug log
+            console.log('Editing file:', currentEditFilename);
             // Fetch snippet data
             const res = await fetch('/snippet-raw?file=' + filename);
             const code = await res.text();
@@ -739,6 +741,10 @@ app.get('/admin', requireAuth, csrfProtection, async (req, res) => {
           params.append('language', language);
           params.append('snippet', code);
           params.append('_csrf', csrfToken);
+
+          // Debug log
+          console.log('Saving:', { currentEditFilename, language, code, csrfToken });
+
           const res = await fetch('/edit?file=' + encodeURIComponent(currentEditFilename), {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -746,9 +752,9 @@ app.get('/admin', requireAuth, csrfProtection, async (req, res) => {
             credentials: 'same-origin'
           });
           if (res.redirected) {
-            window.location.href = res.url; // <-- This will reload the admin page and show the updated snippet
+            window.location.href = res.url;
           } else if (res.ok) {
-            window.location.reload(); // fallback: reload the page to reflect changes
+            window.location.reload();
           } else {
             alert('Failed to save changes');
           }
