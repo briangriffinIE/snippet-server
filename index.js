@@ -615,194 +615,119 @@ app.get('/admin', requireAuth, csrfProtection, async (req, res) => {
       <form id="admin-form" style="display:none;">
         <input type="hidden" name="_csrf" value="${req.csrfToken()}">
       </form>
+      <!-- Monaco Modal -->
+      <div id="snippet-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); z-index:2000;">
+        <div style="background:#232323; border-radius:8px; max-width:800px; margin:5% auto; padding:2em; position:relative;">
+          <button id="close-modal" style="position:absolute; top:1em; right:1em; background:#ff5555; color:#fff; border:none; border-radius:3px; padding:0.3em 0.7em; cursor:pointer;">✖</button>
+          <h2 id="modal-title"></h2>
+          <div>
+            <label for="modal-language" style="color:#aaa;">Language:</label>
+            <select id="modal-language" style="margin-bottom:1em;">
+              <option value="plaintext">Plain Text</option>
+              <option value="sql">SQL</option>
+              <option value="powershell">PowerShell</option>
+              <option value="javascript">JavaScript</option>
+              <option value="python">Python</option>
+              <option value="bash">Bash</option>
+            </select>
+          </div>
+          <div id="monaco-modal" style="height:350px;width:100%;border-radius:4px;margin-bottom:1em;"></div>
+          <div id="modal-actions" style="margin-top:1em; display:none;">
+            <button id="save-edit" style="background:#007acc; color:#fff; border:none; border-radius:4px; padding:0.5em 1.2em; cursor:pointer;">Save Changes</button>
+          </div>
+        </div>
+      </div>
+      <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
       <script>
-        document.addEventListener('DOMContentLoaded', function() {
-          const searchInput = document.getElementById('search');
-          const languageSelect = document.getElementById('language');
-          const sortSelect = document.getElementById('sort');
-          const snippetList = document.getElementById('snippet-list');
-          const noResults = document.getElementById('no-results');
-
-          console.log('DOMContentLoaded');
-          console.log('snippetList:', snippetList);
-
-          async function updateList() {
-            const query = searchInput.value;
-            const language = languageSelect.value;
-            const response = await fetch('/search?q=' + encodeURIComponent(query) + '&lang=' + encodeURIComponent(language));
-            let snippets = await response.json();
-
-            const sort = sortSelect.value;
-            snippets = snippets.sort((a, b) => {
-              if (sort === 'date-desc') return b.timestamp.localeCompare(a.timestamp);
-              if (sort === 'date-asc') return a.timestamp.localeCompare(b.timestamp);
-              if (sort === 'lang-asc') return a.language.localeCompare(b.language);
-              if (sort === 'lang-desc') return b.language.localeCompare(a.language);
-              return 0;
+        let monacoInstance, currentEditFilename = null, isEditMode = false;
+        const langMap = {
+          plaintext: 'plaintext',
+          sql: 'sql',
+          powershell: 'powershell',
+          javascript: 'javascript',
+          python: 'python',
+          bash: 'shell'
+        };
+        function showModal(title, code, language, editable) {
+          document.getElementById('modal-title').textContent = title;
+          document.getElementById('modal-language').value = language;
+          document.getElementById('modal-language').disabled = !editable;
+          document.getElementById('modal-actions').style.display = editable ? '' : 'none';
+          document.getElementById('snippet-modal').style.display = 'block';
+          isEditMode = editable;
+          require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' }});
+          require(['vs/editor/editor.main'], function () {
+            if (monacoInstance) monacoInstance.dispose();
+            monacoInstance = monaco.editor.create(document.getElementById('monaco-modal'), {
+              value: code,
+              language: langMap[language] || 'plaintext',
+              theme: 'vs-dark',
+              fontSize: 16,
+              minimap: { enabled: false },
+              automaticLayout: true,
+              scrollBeyondLastLine: false,
+              roundedSelection: false,
+              scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
+              readOnly: !editable,
+              lineNumbers: "on"
             });
-
-            if (snippets.length === 0) {
-              snippetList.innerHTML = '';
-              noResults.style.display = '';
-            } else {
-              noResults.style.display = 'none';
-              snippetList.innerHTML = snippets.map(function(s) {
-                return '<tr>' +
-                  '<td>' + s.filename + '</td>' +
-                  '<td>' + s.language + '</td>' +
-                  '<td>' + s.timestamp.replace(/T/, ' ').replace(/-/g, '/').slice(0, 19) + '</td>' +
-                  '<td class="actions">' +
-                    '<a href="/edit?file=' + encodeURIComponent(s.filename) + '">[edit]</a> ' +
-                    '<a href="/view?file=' + encodeURIComponent(s.filename) + '" target="_blank">[view]</a> ' +
-                    '<a href="#" class="delete-link" data-filename="' + encodeURIComponent(s.filename) + '">[delete]</a> ' +
-                    '<a href="#" class="download-link" data-filename="' + encodeURIComponent(s.filename) + '" data-language="' + s.language + '">[download]</a>' +
-                  '</td>' +
-                '</tr>';
-              }).join('');
-            }
-          }
-
-          function attachDeleteHandler() {
-            const snippetList = document.getElementById('snippet-list');
-            snippetList.onclick = async function(event) {
-              const target = event.target;
-              if (target.classList.contains('delete-link')) {
-                event.preventDefault();
-                const filename = decodeURIComponent(target.dataset.filename);
-                if (confirm('Are you sure you want to delete this snippet?')) {
-                  await refreshCsrfTokenForForm('admin-form');
-                  const csrfToken = document.querySelector('#admin-form input[name="_csrf"]').value;
-                  try {
-                    const response = await fetch('/delete', {
-                      method: 'POST',
-                      headers: {
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json'
-                      },
-                      body: JSON.stringify({ 
-                        file: filename, 
-                        _csrf: csrfToken 
-                      }),
-                      credentials: 'same-origin'
-                    });
-                    if (response.ok) {
-                      target.closest('tr').remove();
-                      console.log('Snippet deleted successfully');
-                    } else {
-                      const error = await response.json();
-                      alert('Failed to delete snippet: ' + (error.error || 'Unknown error'));
-                    }
-                  } catch (err) {
-                    console.error('Delete error:', err);
-                    alert('Error: ' + err.message);
-                  }
-                }
-              };
-            };
-          }
-
-          searchInput.addEventListener('input', updateList);
-          languageSelect.addEventListener('change', updateList);
-          sortSelect.addEventListener('change', updateList);
-
-          snippetList.addEventListener('click', async (event) => {
-            const target = event.target;
-            if (target.classList.contains('delete-link')) {
-              event.preventDefault();
-              const filename = decodeURIComponent(target.dataset.filename);
-              if (confirm('Are you sure you want to delete this snippet?')) {
-                await refreshCsrfTokenForForm('admin-form');
-                const csrfToken = document.querySelector('#admin-form input[name="_csrf"]').value;
-                try {
-                  const response = await fetch('/delete', {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'Accept': 'application/json'
-                    },
-                    body: JSON.stringify({ 
-                      file: filename, 
-                      _csrf: csrfToken 
-                    }),
-                    credentials: 'same-origin'
-                  });
-                  
-                  if (response.ok) {
-                    target.closest('tr').remove(); // Remove the row from the table
-                    console.log('Snippet deleted successfully');
-                  } else {
-                    const error = await response.json();
-                    alert('Failed to delete snippet: ' + (error.error || 'Unknown error'));
-                  }
-                } catch (err) {
-                  console.error('Delete error:', err);
-                  alert('Error: ' + err.message);
-                }
-              }
-            }
-            if (target.classList.contains('download-link')) {
-              event.preventDefault();
-              const filename = target.dataset.filename;
-              const language = target.dataset.language;
-              try {
-                const res = await fetch('/snippet-raw?file=' + filename);
-                if (!res.ok) throw new Error('Failed to fetch snippet');
-                const data = await res.text();
-                const blob = new Blob([data], { type: 'text/plain' });
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = decodeURIComponent(filename).replace(/\.json$/, '.' + language);
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-              } catch (err) {
-                alert('Failed to download: ' + err.message);
-              }
-            }
           });
-
-          window.copySnippet = async function(event, filename) {
-            event.preventDefault();
-            try {
-              const res = await fetch('/snippet-raw?file=' + filename);
-              if (!res.ok) throw new Error('Failed to fetch snippet');
-              const data = await res.text();
-              if (navigator.clipboard) {
-                await navigator.clipboard.writeText(data);
-                alert('Copied to clipboard!');
-              } else {
-                const textarea = document.createElement('textarea');
-                textarea.value = data;
-                document.body.appendChild(textarea);
-                textarea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textarea);
-                alert('Copied to clipboard!');
-              }
-            } catch (err) {
-              alert('Failed to copy: ' + err.message);
-            }
+        }
+        document.getElementById('close-modal').onclick = () => {
+          document.getElementById('snippet-modal').style.display = 'none';
+          if (monacoInstance) monacoInstance.dispose();
+        };
+        document.getElementById('modal-language').onchange = function() {
+          if (monacoInstance) {
+            monaco.editor.setModelLanguage(monacoInstance.getModel(), langMap[this.value] || 'plaintext');
           }
-
-          window.downloadSnippet = async function(event, filename, language) {
-            event.preventDefault();
-            try {
-              const res = await fetch('/snippet-raw?file=' + filename);
-              if (!res.ok) throw new Error('Failed to fetch snippet');
-              const data = await res.text();
-              const blob = new Blob([data], { type: 'text/plain' });
-              const a = document.createElement('a');
-              a.href = URL.createObjectURL(blob);
-              a.download = decodeURIComponent(filename).replace(/\.json$/, '.' + language);
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-            } catch (err) {
-              alert('Failed to download: ' + err.message);
-            }
+        };
+        document.getElementById('save-edit').onclick = async function() {
+          const code = monacoInstance.getValue();
+          const language = document.getElementById('modal-language').value;
+          await refreshCsrfTokenForForm('admin-form');
+          const csrfToken = document.querySelector('#admin-form input[name="_csrf"]').value;
+          const params = new URLSearchParams();
+          params.append('language', language);
+          params.append('snippet', code);
+          params.append('_csrf', csrfToken);
+          const res = await fetch('/edit?file=' + encodeURIComponent(currentEditFilename), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: params,
+            credentials: 'same-origin'
+          });
+          if (res.redirected) {
+            window.location.reload();
+          } else {
+            alert('Failed to save changes');
           }
-
-          updateList();
+        };
+        document.getElementById('snippet-list').addEventListener('click', async function(event) {
+          const target = event.target;
+          if (target.textContent === '[view]') {
+            event.preventDefault();
+            const filename = target.href.split('file=')[1];
+            currentEditFilename = filename;
+            const res = await fetch('/snippet-raw?file=' + filename);
+            const code = await res.text();
+            // Fetch language
+            const row = target.closest('tr');
+            const language = row ? row.children[1].textContent : 'plaintext';
+            showModal('View Snippet', code, language, false);
+          }
+          if (target.textContent === '[edit]') {
+            event.preventDefault();
+            const filename = target.href.split('file=')[1];
+            currentEditFilename = filename;
+            // Fetch snippet data
+            const res = await fetch('/snippet-raw?file=' + filename);
+            const code = await res.text();
+            // Fetch language
+            const row = target.closest('tr');
+            const language = row ? row.children[1].textContent : 'plaintext';
+            showModal('Edit Snippet', code, language, true);
+          }
         });
       </script>
     </body>
