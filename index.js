@@ -499,8 +499,8 @@ app.get('/search', async (req, res) => {
   res.json(rows);
 });
 
-app.get('/admin', requireAuth, csrfProtection, (req, res) => {
-  const snippets = getAllSnippets();
+app.get('/admin', requireAuth, csrfProtection, async (req, res) => {
+  const { rows: snippets } = await pool.query('SELECT * FROM snippets ORDER BY timestamp DESC');
   const languages = [...new Set(snippets.map(s => s.language))];
   const snippetCount = snippets.length;
   const langCounts = languages.map(lang => ({
