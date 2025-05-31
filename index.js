@@ -656,13 +656,18 @@ app.get('/admin', requireAuth, csrfProtection, async (req, res) => {
           document.getElementById('modal-actions').style.display = editable ? '' : 'none';
           document.getElementById('snippet-modal').style.display = 'block';
           isEditMode = editable;
+
+          // Always clear the container before creating a new editor
+          const monacoContainer = document.getElementById('monaco-modal');
+          if (monacoInstance) {
+            monacoInstance.dispose();
+            monacoInstance = null;
+          }
+          monacoContainer.innerHTML = ""; // Clear previous editor DOM
+
           require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' }});
           require(['vs/editor/editor.main'], function () {
-            if (monacoInstance) {
-              monacoInstance.dispose();
-              monacoInstance = null;
-            }
-            monacoInstance = monaco.editor.create(document.getElementById('monaco-modal'), {
+            monacoInstance = monaco.editor.create(monacoContainer, {
               value: code,
               language: langMap[language] || 'plaintext',
               theme: 'vs-dark',
