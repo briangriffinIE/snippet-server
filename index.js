@@ -725,6 +725,39 @@ app.get('/admin', requireAuth, csrfProtection, async (req, res) => {
             const language = row ? row.children[1].textContent : 'plaintext';
             showModal('View Snippet', code, language, false);
           }
+
+          if (target.classList.contains('delete-link')) {
+            event.preventDefault();
+            const filename = decodeURIComponent(target.dataset.filename);
+            if (!confirm('Delete snippet "' + filename + '"? This cannot be undone.')) return;
+
+            // Refresh CSRF token for admin-form
+            await refreshCsrfTokenForForm('admin-form');
+            const csrfToken = document.querySelector('#admin-form input[name="_csrf"]').value;
+
+            const params = new URLSearchParams();
+            params.append('file', filename);
+            params.append('_csrf', csrfToken);
+
+            try {
+              const res = await fetch('/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: params,
+                credentials: 'same-origin'
+              });
+              if (res.ok) {
+                // Remove the row from the table
+                const row = target.closest('tr');
+                if (row) row.remove();
+              } else {
+                const data = await res.json();
+                alert(data.error || 'Failed to delete snippet');
+              }
+            } catch (err) {
+              alert('Error deleting snippet: ' + err.message);
+            }
+          }
         });
 
         // Save changes handler for the modal
