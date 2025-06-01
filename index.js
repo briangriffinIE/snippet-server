@@ -11,6 +11,7 @@ const csrf = require('csurf');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const { Pool } = require('pg');
+const crypto = require('crypto');
 
 const app = express();
 
@@ -1037,4 +1038,187 @@ pool.query('SELECT NOW()', (err, res) => {
   } else {
     console.log('Postgres connected:', res.rows[0]);
   }
+});
+
+// Add API key middleware
+const requireApiKey = (req, res, next) => {
+  const apiKey = req.headers['x-api-key'];
+  if (!apiKey || apiKey !== process.env.API_KEY) {
+    return res.status(401).json({ error: 'Invalid API key' });
+  }
+  next();
+};
+
+// Add new REST API endpoint for posting snippets
+app.post('/api/snippets', requireApiKey, async (req, res) => {
+  try {
+    const { language, code } = req.body;
+    
+    if (!language || !code) {
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        required: ['language', 'code']
+      });
+    }
+
+    const timestamp = new Date().toISOString();
+    const filename = `${timestamp}.json`;
+
+    await pool.query(
+      'INSERT INTO snippets (filename, language, code, timestamp) VALUES ($1, $2, $3, $4)',
+      [filename, language, code, timestamp]
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Snippet created successfully',
+      data: {
+        filename,
+        language,
+        timestamp
+      }
+    });
+  } catch (err) {
+    console.error('API Error:', err);
+    res.status(500).json({ 
+      error: 'Failed to create snippet',
+      details: err.message 
+    });
+  }
+});
+
+// Add endpoint to get all snippets
+app.get('/api/snippets', requireApiKey, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM snippets ORDER BY timestamp DESC');
+    res.json(rows);
+  } catch (err) {
+    console.error('API Error:', err);
+    res.status(500).json({ 
+      error: 'Failed to fetch snippets',
+      details: err.message 
+    });
+  }
+});
+
+// Add endpoint to get a specific snippet
+app.get('/api/snippets/:filename', requireApiKey, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM snippets WHERE filename = $1', [req.params.filename]);
+    if (!rows.length) {
+      return res.status(404).json({ error: 'Snippet not found' });
+    }
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('API Error:', err);
+    res.status(500).json({ 
+      error: 'Failed to fetch snippet',
+      details: err.message 
+    });
+  }
+});
+
+// Add endpoint to delete a snippet
+app.delete('/api/snippets/:filename', requireApiKey, async (req, res) => {
+  try {
+    const result = await pool.query('DELETE FROM snippets WHERE filename = $1', [req.params.filename]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Snippet not found' });
+    }
+    res.json({ success: true, message: 'Snippet deleted successfully' });
+  } catch (err) {
+    console.error('API Error:', err);
+    res.status(500).json({ 
+      error: 'Failed to delete snippet',
+      details: err.message 
+    });
+  }
+});
+
+// Add API key generation utility
+function generateApiKey() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+// Add endpoint to generate API key
+app.get('/generate-api-key', requireAuth, (req, res) => {
+  const apiKey = generateApiKey();
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Generate API Key</title>
+      <style>
+        body { font-family: monospace; background: #1e1e1e; color: #eee; padding: 2em; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .key-box { 
+          background: #252526; 
+          padding: 1em; 
+          border-radius: 4px; 
+          margin: 1em 0;
+          word-break: break-all;
+        }
+        .warning {
+          color: #ff5555;
+          margin: 1em 0;
+        }
+        button {
+          background: #007acc;
+          color: white;
+          border: none;
+          padding: 0.5em 1em;
+          border-radius: 4px;
+          cursor: pointer;
+          margin: 1em 0;
+        }
+        .copy-btn {
+          background: #333;
+          margin-left: 1em;
+        }
+      </style>
+    </head>
+    <body>
+      ${getNavigation('admin')}
+      <div class="container">
+        <h2>Generate API Key</h2>
+        <div class="warning">
+          ⚠️ This key will only be shown once. Make sure to copy it now!
+        </div>
+        <div class="key-box">
+          <code id="api-key">${apiKey}</code>
+          <button class="copy-btn" onclick="copyApiKey()">Copy</button>
+        </div>
+        <p>To use this API key, set it in your environment variables:</p>
+        <div class="key-box">
+          <code>export API_KEY=${apiKey}</code>
+          <button class="copy-btn" onclick="copyEnvVar()">Copy</button>
+        </div>
+        <p>Or add it to your .env file:</p>
+        <div class="key-box">
+          <code>API_KEY=${apiKey}</code>
+          <button class="copy-btn" onclick="copyEnvFile()">Copy</button>
+        </div>
+        <p><a href="/admin">Back to Admin</a></p>
+      </div>
+      <script>
+        function copyApiKey() {
+          copyToClipboard(document.getElementById('api-key').textContent);
+        }
+        function copyEnvVar() {
+          copyToClipboard('export API_KEY=' + document.getElementById('api-key').textContent);
+        }
+        function copyEnvFile() {
+          copyToClipboard('API_KEY=' + document.getElementById('api-key').textContent);
+        }
+        function copyToClipboard(text) {
+          navigator.clipboard.writeText(text).then(() => {
+            alert('Copied to clipboard!');
+          }).catch(err => {
+            console.error('Failed to copy:', err);
+          });
+        }
+      </script>
+    </body>
+    </html>
+  `);
 });
